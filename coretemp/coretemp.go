@@ -1,3 +1,5 @@
+// Package coretemp retrieves CPU core temperatures via the hwmon coretemp
+// driver.
 package coretemp
 
 import (
@@ -13,13 +15,13 @@ import (
 )
 
 const (
-	hwmonBase         = "/sys/class/hwmon"
-	tempFilePatternRE = `^temp\d+_input$`
+	hwmonBase         = "/sys/class/hwmon" // where hwmon devices are found
+	tempFilePatternRE = `^temp\d+_input$`  // match files for individual temps
 )
 
 var (
-	devices         []string
-	tempFilePattern *regexp.Regexp
+	devices         []string       // stores discovered hwmon coretemp devices
+	tempFilePattern *regexp.Regexp // compiled regex for reuse
 )
 
 func init() {
@@ -27,6 +29,9 @@ func init() {
 	tempFilePattern = regexp.MustCompile(tempFilePatternRE)
 }
 
+// discoverDevices searches the hwmon sys tree for coretemp devices and stores
+// any it finds. Errors that prevent any results are returned in err, but it's
+// possible to receive an error back AND have the devices updated successfully.
 func discoverDevices() (err error) {
 	devices = make([]string, 0)
 	if entries, err := fs.ReadDir(os.DirFS(hwmonBase), "."); err != nil {
@@ -52,6 +57,10 @@ func discoverDevices() (err error) {
 	return
 }
 
+// getDeviceTemps retrieves all core temperatures found for the given device.
+// Any errors encountered will be returned in err, but if the function is able
+// to continue working it will do so. This means that t can have valid values
+// even when err is not nil.
 func getDeviceTemps(device string) (t []float64, err error) {
 	if entries, err := fs.ReadDir(os.DirFS(hwmonBase), device); err != nil {
 		logging.Errorln(err)
@@ -79,6 +88,12 @@ func getDeviceTemps(device string) (t []float64, err error) {
 	return
 }
 
+// GetTemps queries the hwmon sysfs for current termperature readings and
+// returns them in t.
+//
+// Any error encountered is returned in err, but the function will continue to
+// query temperatures until it has checked all devices found. Known devices are
+// cached to improve speed for subsequent calls.
 func GetTemps() (t []float64, err error) {
 	if len(devices) == 0 {
 		if err = discoverDevices(); err != nil {
@@ -100,6 +115,10 @@ func GetTemps() (t []float64, err error) {
 	return
 }
 
+// MaxTemperature queries all known coretemp devices for all of their
+// temperatures and returns the single highest observed value in t. Any error
+// encountered is returned in err, but t can still hold a valid value in the
+// case of error.
 func MaxTemperature() (t float64, err error) {
 	temps, e := GetTemps()
 	if e != nil {

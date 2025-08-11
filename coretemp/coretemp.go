@@ -33,16 +33,24 @@ func init() {
 // any it finds. Errors that prevent any results are returned in err, but it's
 // possible to receive an error back AND have the devices updated successfully.
 func discoverDevices() (err error) {
+	logging.Debugln("entering discoverDevices")
+	defer logging.Debugln("exiting discoverDevices")
+
 	devices = make([]string, 0)
 	if entries, err := fs.ReadDir(os.DirFS(hwmonBase), "."); err != nil {
 		logging.Errorln(err)
 		return fmt.Errorf("failed to read directory %s", hwmonBase)
 	} else {
+		logging.Debugln("found the following devices in the hwmon path:")
+		logging.Debugln(entries)
 		for _, entry := range entries {
-			if name, err := os.ReadFile(filepath.Join("/sys/class", "hwmon", entry.Name(), "name")); err != nil {
+			absPath := filepath.Join("/sys/class", "hwmon", entry.Name(), "name")
+			logging.Debugf("attempting to read %s", absPath)
+			if name, err := os.ReadFile(absPath); err != nil {
 				logging.Errorln(err)
 				logging.Errorf("unable to read name for hwmon device %s", entry.Name())
 			} else {
+				logging.Debugf("found hwmon device %s", entry.Name())
 				if strings.TrimSpace(string(name)) == "coretemp" {
 					devices = append(devices, entry.Name())
 				}
@@ -62,25 +70,31 @@ func discoverDevices() (err error) {
 // to continue working it will do so. This means that t can have valid values
 // even when err is not nil.
 func getDeviceTemps(device string) (t []float64, err error) {
-	if entries, err := fs.ReadDir(os.DirFS(hwmonBase), device); err != nil {
+	logging.Debugln("entering getDeviceTemps")
+	defer logging.Debugln("exiting getDeviceTemps")
+
+	entries, err := fs.ReadDir(os.DirFS(hwmonBase), device)
+	if err != nil {
 		logging.Errorln(err)
 		return nil, fmt.Errorf("failed to list the directory for hwmon device %s", device)
-	} else {
-		t = make([]float64, 0)
-		for _, entry := range entries {
-			if tempFilePattern.MatchString(entry.Name()) {
-				value, err := os.ReadFile(filepath.Join(hwmonBase, device, entry.Name()))
-				if err != nil {
-					logging.Errorln(err)
-					logging.Errorf("failed to read %s for hwmon device %s", entry.Name(), device)
-					break
-				}
-				if f, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 64); err != nil {
-					logging.Errorln(err)
-					logging.Errorf("failed to parse float value for %s for device %s", entry.Name(), device)
-				} else {
-					t = append(t, f/1000)
-				}
+	}
+
+	t = make([]float64, 0)
+	for _, entry := range entries {
+		if tempFilePattern.MatchString(entry.Name()) {
+			absPath := filepath.Join(hwmonBase, device, entry.Name())
+			logging.Debugf("attempting to read temperature from %s", absPath)
+			if value, err := os.ReadFile(absPath); err != nil {
+				// couldn't read a temp; log it but keep going
+				logging.Errorln(err)
+				logging.Errorf("failed to read %s for hwmon device %s", entry.Name(), device)
+				continue
+			} else if f, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 64); err != nil {
+				logging.Errorln(err)
+				logging.Errorf("failed to parse float value for %s for device %s", entry.Name(), device)
+			} else {
+				logging.Debugf("read temperature value %f", f/1000)
+				t = append(t, f/1000)
 			}
 		}
 	}
@@ -95,7 +109,11 @@ func getDeviceTemps(device string) (t []float64, err error) {
 // query temperatures until it has checked all devices found. Known devices are
 // cached to improve speed for subsequent calls.
 func GetTemps() (t []float64, err error) {
+	logging.Debugln("entering GetTemps")
+	defer logging.Debugln("exiting GetTemps")
+
 	if len(devices) == 0 {
+		logging.Debugln("temps requested but no cached devices; discovering")
 		if err = discoverDevices(); err != nil {
 			logging.Errorln(err)
 			return nil, fmt.Errorf("temperatures requested, but no coretemp devices found")
@@ -108,6 +126,8 @@ func GetTemps() (t []float64, err error) {
 			logging.Errorln(e)
 			err = fmt.Errorf("failed to retrieve temperatures for hwmon device %s", device)
 		} else {
+			logging.Debugf("got temperatures for device %s:", device)
+			logging.Debugln(temps)
 			t = append(t, temps...)
 		}
 	}
@@ -120,10 +140,15 @@ func GetTemps() (t []float64, err error) {
 // encountered is returned in err, but t can still hold a valid value in the
 // case of error.
 func MaxTemperature() (t float64, err error) {
+	logging.Debugln("entering MaxTemperature")
+	defer logging.Debugln("exiting MaxTemperature")
+
 	temps, e := GetTemps()
 	if e != nil {
 		err = e
 	}
+	logging.Debugln("read the following temperatures:")
+	logging.Debugln(temps)
 	for _, temp := range temps {
 		if temp > t {
 			t = temp

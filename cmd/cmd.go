@@ -1,8 +1,11 @@
+// The cmd package provides the main user interface. It parses configuration
+// variables and contains the main execution loop.
 package cmd
 
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -12,10 +15,11 @@ import (
 )
 
 const (
-	idleTemp       = 40
-	intervalString = "3s"
-	loadTemp       = 90
-	minFanSpeed    = 25
+	idleTemp       = 40      // expected temperature when the server is idle
+	intervalString = "3s"    // how long to sleep between readings/updates
+	loadTemp       = 90      // temperature at which fans go to 100% power
+	minFanSpeed    = 25      // floor value for fan power setting
+	semVer         = "1.0.0" // version string
 	usage          = `ipmi-fancontrol is a simple daemon to monitor CPU temperatures and adjust fan
 speeds in response via IPMI. It is intended to be run as a foreground daemon
 managed by systemd.
@@ -32,7 +36,7 @@ SENSOR_IDS: If the fan sensor IDs are already known, these can be passed
 )
 
 var (
-	interval time.Duration
+	interval time.Duration // holds the parsed string interval above
 )
 
 func init() {
@@ -47,13 +51,30 @@ func init() {
 // It handles parsing flags and env variables, then calls the main loop for
 // execution.
 func Start() {
-	// handle help flag
-	if len(os.Args) > 1 && (strings.ToLower(os.Args[1]) == "-h" || strings.ToLower(os.Args[1]) == "--help") {
-		fmt.Println(usage)
-		os.Exit(0)
+	// handle flags
+	if len(os.Args) > 1 {
+		printHelp, exitVal := false, 0
+		for _, flag := range os.Args[1:] {
+			switch strings.ToLower(flag) {
+			case "-h", "--help":
+				printHelp = true
+			case "-v", "--version":
+				fmt.Printf(" %s built on %s\n", semVer, runtime.Version())
+			default:
+				fmt.Printf("unrecognized flag '%s'\n", flag)
+				printHelp = true
+				exitVal = 1
+			}
+		}
+		if printHelp {
+			fmt.Println(usage)
+		}
+		os.Exit(exitVal)
 	}
 
 	setLogLevel()
+	logging.Debugln("entering Start")
+	defer logging.Debugln("exiting Start")
 
 	if err := setFanIDs(); err != nil {
 		logging.Errorln(err)
@@ -64,8 +85,10 @@ func Start() {
 		logging.Errorln(err)
 		logging.Fatalln("failed to enable manual fan control")
 	}
+	// make sure that we return control to the BMC on exit
 	defer bmc.EnableAutoCurve()
 
+	// main loop
 	for {
 		if t, err := coretemp.MaxTemperature(); err != nil {
 			logging.Errorln(err)
@@ -75,15 +98,18 @@ func Start() {
 				logging.Fatalln("failed to set fail-safe speed; exiting")
 			}
 		} else {
+			logging.Debugf("max core temperature read is %f", t)
 			desiredSpeed := (int(t)-idleTemp)*(100-minFanSpeed)/(loadTemp-idleTemp) + minFanSpeed
 			if desiredSpeed < minFanSpeed {
 				desiredSpeed = minFanSpeed
 			}
+			logging.Debugf("target fan power is %d%%", desiredSpeed)
 			if err := bmc.SetAllFans(uint8(desiredSpeed)); err != nil {
 				logging.Errorln(err)
 			}
 		}
 
+		logging.Debugf("sleeping for %d seconds", interval)
 		time.Sleep(interval)
 	}
 }
